@@ -6,7 +6,18 @@ from urllib.parse import urlparse
 import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-import config
+
+# Try to import config for local development, fallback to environment variables
+try:
+    import config
+    TELEGRAM_BOT_TOKEN = config.TELEGRAM_BOT_TOKEN
+    MAX_FILE_SIZE = config.MAX_FILE_SIZE
+    DOWNLOAD_TIMEOUT = config.DOWNLOAD_TIMEOUT
+except ImportError:
+    # Use environment variables for deployment
+    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+    MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 52428800))  # 50MB default
+    DOWNLOAD_TIMEOUT = int(os.getenv('DOWNLOAD_TIMEOUT', 300))  # 5 minutes default
 
 # Configure logging
 logging.basicConfig(
@@ -17,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 class TikTokDownloader:
     def __init__(self):
-        self.max_file_size = config.MAX_FILE_SIZE  # 50MB default
-        self.download_timeout = config.DOWNLOAD_TIMEOUT  # 5 minutes default
+        self.max_file_size = MAX_FILE_SIZE
+        self.download_timeout = DOWNLOAD_TIMEOUT
         
     def is_tiktok_url(self, url: str) -> bool:
         """Check if the URL is a TikTok URL"""
@@ -69,9 +80,9 @@ class TikTokDownloader:
 
 class TelegramBot:
     def __init__(self):
-        self.token = config.TELEGRAM_BOT_TOKEN
+        self.token = TELEGRAM_BOT_TOKEN
         if not self.token:
-            raise ValueError("TELEGRAM_BOT_TOKEN not found in config file")
+            raise ValueError("TELEGRAM_BOT_TOKEN not found in environment variables or config file")
         
         self.downloader = TikTokDownloader()
         self.application = Application.builder().token(self.token).build()
@@ -215,7 +226,7 @@ def main():
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         print(f"Error: {e}")
-        print("Please check your TELEGRAM_BOT_TOKEN in the config.py file")
+        print("Please check your TELEGRAM_BOT_TOKEN in environment variables or config.py file")
 
 if __name__ == "__main__":
     main() 

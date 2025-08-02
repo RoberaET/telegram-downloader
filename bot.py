@@ -60,9 +60,28 @@ class TikTokDownloader:
                 'outtmpl': output_path,
                 'quiet': True,
                 'no_warnings': True,
+                'extract_flat': False,
+                'no_check_certificate': True,
+                'ignoreerrors': False,
+                'nocheckcertificate': True,
+                'prefer_ffmpeg': True,
+                'geo_bypass': True,
+                'geo_bypass_country': 'US',
+                'geo_bypass_ip_block': '1.0.0.1',
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # First, try to extract info to validate the URL
+                try:
+                    info = ydl.extract_info(url, download=False)
+                    if not info:
+                        logger.error("Could not extract video info")
+                        return None
+                except Exception as e:
+                    logger.error(f"Error extracting video info: {e}")
+                    return None
+                
+                # Now download the video
                 ydl.download([url])
                 
             # Check if file was downloaded
@@ -70,9 +89,13 @@ class TikTokDownloader:
                 file_size = os.path.getsize(output_path)
                 if file_size > self.max_file_size:
                     os.remove(output_path)
+                    logger.error(f"File too large: {file_size} bytes")
                     return None
+                logger.info(f"Successfully downloaded: {output_path} ({file_size} bytes)")
                 return output_path
-            return None
+            else:
+                logger.error(f"Download completed but file not found: {output_path}")
+                return None
             
         except Exception as e:
             logger.error(f"Error downloading video: {e}")
@@ -183,7 +206,18 @@ Need help? Contact the bot administrator.
             )
             
             if not downloaded_path:
-                await processing_msg.edit_text("❌ Failed to download video. The video might be private or unavailable.")
+                await processing_msg.edit_text(
+                    "❌ Failed to download video.\n\n"
+                    "Possible reasons:\n"
+                    "• Video is private or deleted\n"
+                    "• TikTok API is temporarily unavailable\n"
+                    "• Video is region-restricted\n"
+                    "• URL format is not supported\n\n"
+                    "Please try:\n"
+                    "• Using a different TikTok video\n"
+                    "• Checking if the video is public\n"
+                    "• Waiting a few minutes and trying again"
+                )
                 return
             
             # Send the video

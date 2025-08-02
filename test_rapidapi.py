@@ -42,7 +42,11 @@ def test_rapidapi_download(url):
             # Try to extract video URL
             video_url = None
             if isinstance(data, dict):
-                if 'video' in data and isinstance(data['video'], list) and len(data['video']) > 0:
+                # Check for downloadUrl (most common format)
+                if 'downloadUrl' in data:
+                    video_url = data['downloadUrl']
+                # Check for direct video URL
+                elif 'video' in data and isinstance(data['video'], list) and len(data['video']) > 0:
                     video_url = data['video'][0].get('url')
                 elif 'video' in data and isinstance(data['video'], dict):
                     video_url = data['video'].get('url')

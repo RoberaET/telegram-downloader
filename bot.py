@@ -86,8 +86,11 @@ class TikTokDownloader:
             
             # Try different possible response formats
             if isinstance(video_info, dict):
+                # Check for downloadUrl (most common format)
+                if 'downloadUrl' in video_info:
+                    video_url = video_info['downloadUrl']
                 # Check for direct video URL
-                if 'video' in video_info and isinstance(video_info['video'], list) and len(video_info['video']) > 0:
+                elif 'video' in video_info and isinstance(video_info['video'], list) and len(video_info['video']) > 0:
                     video_url = video_info['video'][0].get('url')
                 elif 'video' in video_info and isinstance(video_info['video'], dict):
                     video_url = video_info['video'].get('url')

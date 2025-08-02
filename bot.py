@@ -1,9 +1,10 @@
 import os
 import asyncio
 import logging
+import requests
+import json
 from typing import Optional
 from urllib.parse import urlparse
-import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
@@ -13,11 +14,13 @@ try:
     TELEGRAM_BOT_TOKEN = config.TELEGRAM_BOT_TOKEN
     MAX_FILE_SIZE = config.MAX_FILE_SIZE
     DOWNLOAD_TIMEOUT = config.DOWNLOAD_TIMEOUT
+    RAPIDAPI_KEY = getattr(config, 'RAPIDAPI_KEY', 'c0fe76b43emsh3180b8539e2afaep11551fjsn7990c143c224')
 except ImportError:
     # Use environment variables for deployment
     TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
     MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 52428800))  # 50MB default
     DOWNLOAD_TIMEOUT = int(os.getenv('DOWNLOAD_TIMEOUT', 300))  # 5 minutes default
+    RAPIDAPI_KEY = os.getenv('RAPIDAPI_KEY', 'c0fe76b43emsh3180b8539e2afaep11551fjsn7990c143c224')
 
 # Configure logging
 logging.basicConfig(
@@ -30,6 +33,8 @@ class TikTokDownloader:
     def __init__(self):
         self.max_file_size = MAX_FILE_SIZE
         self.download_timeout = DOWNLOAD_TIMEOUT
+        self.api_key = RAPIDAPI_KEY
+        self.api_host = "tiktok-video-downloader-api.p.rapidapi.com"
         
     def is_tiktok_url(self, url: str) -> bool:
         """Check if the URL is a TikTok URL"""
@@ -37,64 +42,92 @@ class TikTokDownloader:
         return any(domain in parsed.netloc.lower() for domain in ['tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com'])
     
     def get_video_info(self, url: str) -> Optional[dict]:
-        """Get video information without downloading"""
+        """Get video information using RapidAPI"""
         try:
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': True,
+            headers = {
+                'x-rapidapi-key': self.api_key,
+                'x-rapidapi-host': self.api_host
             }
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                return info
+            params = {
+                'videoUrl': url
+            }
+            
+            response = requests.get(
+                f"https://{self.api_host}/media",
+                headers=headers,
+                params=params,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"API Response: {data}")
+                return data
+            else:
+                logger.error(f"API Error: {response.status_code} - {response.text}")
+                return None
+                
         except Exception as e:
             logger.error(f"Error getting video info: {e}")
             return None
     
     def download_video(self, url: str, output_path: str) -> Optional[str]:
-        """Download TikTok video"""
+        """Download TikTok video using RapidAPI"""
         try:
-            ydl_opts = {
-                'format': 'best[filesize<50M]/best',
-                'outtmpl': output_path,
-                'quiet': True,
-                'no_warnings': True,
-                'extract_flat': False,
-                'no_check_certificate': True,
-                'ignoreerrors': False,
-                'nocheckcertificate': True,
-                'prefer_ffmpeg': True,
-                'geo_bypass': True,
-                'geo_bypass_country': 'US',
-                'geo_bypass_ip_block': '1.0.0.1',
-            }
+            # First get video info
+            video_info = self.get_video_info(url)
+            if not video_info:
+                logger.error("Could not get video info from API")
+                return None
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # First, try to extract info to validate the URL
-                try:
-                    info = ydl.extract_info(url, download=False)
-                    if not info:
-                        logger.error("Could not extract video info")
+            # Extract video URL from API response
+            video_url = None
+            
+            # Try different possible response formats
+            if isinstance(video_info, dict):
+                # Check for direct video URL
+                if 'video' in video_info and isinstance(video_info['video'], list) and len(video_info['video']) > 0:
+                    video_url = video_info['video'][0].get('url')
+                elif 'video' in video_info and isinstance(video_info['video'], dict):
+                    video_url = video_info['video'].get('url')
+                elif 'url' in video_info:
+                    video_url = video_info['url']
+                elif 'data' in video_info and isinstance(video_info['data'], dict):
+                    data = video_info['data']
+                    if 'video' in data and isinstance(data['video'], list) and len(data['video']) > 0:
+                        video_url = data['video'][0].get('url')
+                    elif 'url' in data:
+                        video_url = data['url']
+            
+            if not video_url:
+                logger.error(f"No video URL found in API response: {video_info}")
+                return None
+            
+            logger.info(f"Downloading video from: {video_url}")
+            
+            # Download the video
+            response = requests.get(video_url, timeout=60, stream=True)
+            if response.status_code == 200:
+                with open(output_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                
+                # Check file size
+                if os.path.exists(output_path):
+                    file_size = os.path.getsize(output_path)
+                    if file_size > self.max_file_size:
+                        os.remove(output_path)
+                        logger.error(f"File too large: {file_size} bytes")
                         return None
-                except Exception as e:
-                    logger.error(f"Error extracting video info: {e}")
+                    logger.info(f"Successfully downloaded: {output_path} ({file_size} bytes)")
+                    return output_path
+                else:
+                    logger.error(f"Download completed but file not found: {output_path}")
                     return None
-                
-                # Now download the video
-                ydl.download([url])
-                
-            # Check if file was downloaded
-            if os.path.exists(output_path):
-                file_size = os.path.getsize(output_path)
-                if file_size > self.max_file_size:
-                    os.remove(output_path)
-                    logger.error(f"File too large: {file_size} bytes")
-                    return None
-                logger.info(f"Successfully downloaded: {output_path} ({file_size} bytes)")
-                return output_path
             else:
-                logger.error(f"Download completed but file not found: {output_path}")
+                logger.error(f"Failed to download video: {response.status_code}")
                 return None
             
         except Exception as e:
@@ -123,7 +156,7 @@ class TelegramBot:
         welcome_message = """
 🎵 Welcome to TikTok Video Downloader Bot! 🎵
 
-I can help you download TikTok videos without watermarks.
+I can help you download TikTok videos without watermarks using RapidAPI.
 
 📱 Just send me a TikTok video URL and I'll download it for you!
 
@@ -156,6 +189,8 @@ Commands:
 • https://vm.tiktok.com/xxxxx/
 • https://vt.tiktok.com/xxxxx/
 
+⚡ Powered by RapidAPI TikTok Video Downloader
+
 ⚠️ Important notes:
 • Maximum file size: 50MB
 • Download time depends on video size and your internet speed
@@ -180,17 +215,11 @@ Need help? Contact the bot administrator.
             return
         
         # Send processing message
-        processing_msg = await update.message.reply_text("🔄 Processing your TikTok video...")
+        processing_msg = await update.message.reply_text("🔄 Processing your TikTok video with RapidAPI...")
         
         try:
-            # Get video info first
-            video_info = self.downloader.get_video_info(message_text)
-            if not video_info:
-                await processing_msg.edit_text("❌ Could not fetch video information. Please check the URL and try again.")
-                return
-            
             # Create output filename
-            video_id = video_info.get('id', 'unknown')
+            video_id = f"tiktok_{hash(message_text) % 1000000}"
             output_filename = f"tiktok_{video_id}.mp4"
             
             # Download the video
@@ -210,7 +239,7 @@ Need help? Contact the bot administrator.
                     "❌ Failed to download video.\n\n"
                     "Possible reasons:\n"
                     "• Video is private or deleted\n"
-                    "• TikTok API is temporarily unavailable\n"
+                    "• RapidAPI service is temporarily unavailable\n"
                     "• Video is region-restricted\n"
                     "• URL format is not supported\n\n"
                     "Please try:\n"
@@ -228,7 +257,8 @@ Need help? Contact the bot administrator.
                     video=video_file,
                     caption=f"🎵 Downloaded TikTok Video\n\n"
                            f"Original URL: {message_text}\n"
-                           f"Downloaded by @{context.bot.username}"
+                           f"Downloaded by @{context.bot.username}\n"
+                           f"⚡ Powered by RapidAPI"
                 )
             
             # Clean up downloaded file
@@ -249,7 +279,7 @@ Need help? Contact the bot administrator.
     
     def run(self):
         """Start the bot"""
-        logger.info("Starting TikTok Downloader Bot...")
+        logger.info("Starting TikTok Downloader Bot with RapidAPI...")
         self.application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 def main():
